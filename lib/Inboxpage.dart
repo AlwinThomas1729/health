@@ -105,21 +105,70 @@ class _InboxPageState extends State<InboxPage> {
   }
 }
 
-class ChatDetailPage extends StatelessWidget {
+class ChatDetailPage extends StatefulWidget {
   final String doctorEmail;
 
   const ChatDetailPage({Key? key, required this.doctorEmail}) : super(key: key);
 
   @override
+  _ChatDetailPageState createState() => _ChatDetailPageState();
+}
+
+class _ChatDetailPageState extends State<ChatDetailPage> {
+  late String doctorFirstName;
+  final TextEditingController _messageController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Extract the first part of the doctorEmail (before the first '_')
+    doctorFirstName = widget.doctorEmail.split('_')[0];
+  }
+
+  // Method to send a new message
+  void _sendMessage() async {
+    String message = _messageController.text.trim();
+    if (message.isNotEmpty) {
+      // Get the current user's email (patient's email)
+      String patientEmail =
+          FirebaseAuth.instance.currentUser?.email?.split('@')[0] ?? '';
+
+      // Use doctorEmail as docId for the chat document
+      String docId = widget.doctorEmail;
+
+      // Create the message map
+      Map<String, dynamic> messageData = {
+        'messages': FieldValue.arrayUnion([
+          {
+            'message': message,
+            'senderEmail': patientEmail,
+            'timestamp': FieldValue.serverTimestamp()
+          },
+        ]),
+      };
+
+      // Store the message in the Firestore collection with doctorEmail as docId
+      await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(docId)
+          .set(messageData, SetOptions(merge: true));
+
+      // Clear the message input
+      _messageController.clear();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Chat Details - $doctorEmail'),
+        title: Text(
+            'Chat - $doctorFirstName'), // Only show the first part of the doctorEmail
       ),
       body: FutureBuilder<DocumentSnapshot>(
         future: FirebaseFirestore.instance
             .collection('chats')
-            .doc(doctorEmail)
+            .doc(widget.doctorEmail)
             .get(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -135,31 +184,61 @@ class ChatDetailPage extends StatelessWidget {
           }
 
           var chatData = snapshot.data!.data() as Map<String, dynamic>;
+          List<dynamic> messages = chatData['messages'] ?? [];
 
           return Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Chat Details',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                ),
+                if (messages.isEmpty)
+                  const Text('No messages available')
+                else
+                  ...messages.map((messageData) {
+                    String message = messageData['message'] ?? 'No message';
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Text(
+                        message,
+                        style: const TextStyle(fontSize: 18),
+                      ),
+                    );
+                  }).toList(),
                 const SizedBox(height: 20),
-                Text(
-                  'Message: ${chatData['messages'] ?? 'No message available'}',
-                  style: const TextStyle(fontSize: 18),
+                Expanded(
+                    child:
+                        Container()), // Empty space to push the text field to the bottom
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10.0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _messageController,
+                          decoration: const InputDecoration(
+                            labelText: 'Enter your message',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.send),
+                        onPressed: _sendMessage,
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 10),
-                /* Text(
-                  'Timestamp: ${chatData['timestamp'] ?? 'No timestamp available'}',
-                  style: const TextStyle(fontSize: 18),
-                ),*/
               ],
             ),
           );
         },
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
   }
 }

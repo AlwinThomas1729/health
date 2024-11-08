@@ -115,123 +115,153 @@ class ChatDetailPage extends StatefulWidget {
 }
 
 class _ChatDetailPageState extends State<ChatDetailPage> {
-  late String doctorFirstName;
-  final TextEditingController _messageController = TextEditingController();
+  TextEditingController _messageController = TextEditingController();
+  String? currentUserEmail;
 
   @override
   void initState() {
     super.initState();
-    // Extract the first part of the doctorEmail (before the first '_')
-    doctorFirstName = widget.doctorEmail.split('_')[0];
+    // Initialize the currentUserEmail with the logged-in user's email
+    currentUserEmail = FirebaseAuth.instance.currentUser?.email;
   }
 
-  // Method to send a new message
+  // Send message function
   void _sendMessage() async {
-    String message = _messageController.text.trim();
-    if (message.isNotEmpty) {
-      // Get the current user's email (patient's email)
-      String patientEmail =
-          FirebaseAuth.instance.currentUser?.email?.split('@')[0] ?? '';
-
-      // Use doctorEmail as docId for the chat document
-      String docId = widget.doctorEmail;
-
-      // Create the message map
-      Map<String, dynamic> messageData = {
-        'messages': FieldValue.arrayUnion([
-          {
-            'message': message,
-            'senderEmail': patientEmail,
-            'timestamp': FieldValue.serverTimestamp()
-          },
-        ]),
+    if (_messageController.text.isNotEmpty && currentUserEmail != null) {
+      final timestamp = Timestamp.now(); // Get the current timestamp
+      final messageData = {
+        'senderEmail': currentUserEmail,
+        'message': _messageController.text,
+        'timestamp': timestamp,
       };
 
-      // Store the message in the Firestore collection with doctorEmail as docId
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(docId)
-          .set(messageData, SetOptions(merge: true));
+      try {
+        // Get the chat document reference using doctorEmail
+        DocumentSnapshot chatDoc = await FirebaseFirestore.instance
+            .collection('chats')
+            .doc(widget.doctorEmail)
+            .get();
 
-      // Clear the message input
-      _messageController.clear();
+        if (!chatDoc.exists) {
+          // If the chat document doesn't exist, create it with an empty messages array
+          await FirebaseFirestore.instance
+              .collection('chats')
+              .doc(widget.doctorEmail)
+              .set({
+            'messages': [messageData],
+          });
+        } else {
+          // If document exists, update with new message in the messages array
+          await FirebaseFirestore.instance
+              .collection('chats')
+              .doc(widget.doctorEmail)
+              .update({
+            'messages': FieldValue.arrayUnion([messageData]),
+          });
+        }
+
+        _messageController
+            .clear(); // Clear the message input field after sending
+      } catch (e) {
+        // Show an error message if the message fails to send
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send message: $e')),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    String doctorName = widget.doctorEmail.split('_')[0];
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
-            'Chat - $doctorFirstName'), // Only show the first part of the doctorEmail
+            doctorName), // Display only the part before the first underscore
       ),
-      body: FutureBuilder<DocumentSnapshot>(
-        future: FirebaseFirestore.instance
-            .collection('chats')
-            .doc(widget.doctorEmail)
-            .get(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: Column(
+        children: [
+          Expanded(
+            child: StreamBuilder<DocumentSnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('chats')
+                  .doc(widget.doctorEmail)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
 
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
+                if (snapshot.hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}'));
+                }
 
-          if (!snapshot.hasData || !snapshot.data!.exists) {
-            return const Center(child: Text("No chat found for this doctor"));
-          }
+                if (!snapshot.hasData || !snapshot.data!.exists) {
+                  return const Center(child: Text('No messages yet.'));
+                }
 
-          var chatData = snapshot.data!.data() as Map<String, dynamic>;
-          List<dynamic> messages = chatData['messages'] ?? [];
+                var chatData = snapshot.data!.data() as Map<String, dynamic>;
+                List<dynamic> messages = chatData['messages'] ?? [];
 
-          return Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (messages.isEmpty)
-                  const Text('No messages available')
-                else
-                  ...messages.map((messageData) {
-                    String message = messageData['message'] ?? 'No message';
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8.0),
-                      child: Text(
-                        message,
-                        style: const TextStyle(fontSize: 18),
-                      ),
-                    );
-                  }).toList(),
-                const SizedBox(height: 20),
-                Expanded(
-                    child:
-                        Container()), // Empty space to push the text field to the bottom
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10.0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _messageController,
-                          decoration: const InputDecoration(
-                            labelText: 'Enter your message',
-                            border: OutlineInputBorder(),
+                return ListView.builder(
+                  itemCount: messages.length,
+                  itemBuilder: (context, index) {
+                    final message = messages[index]['message'];
+                    final senderEmail = messages[index]['senderEmail'];
+
+                    bool isCurrentUser = senderEmail == currentUserEmail;
+
+                    return Align(
+                      alignment: isCurrentUser
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isCurrentUser ? Colors.green : Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            message,
+                            style: TextStyle(
+                              color:
+                                  isCurrentUser ? Colors.white : Colors.black,
+                              fontSize: 16,
+                            ),
                           ),
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.send),
-                        onPressed: _sendMessage,
-                      ),
-                    ],
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    decoration: const InputDecoration(
+                      hintText: "Type a message...",
+                      border: OutlineInputBorder(),
+                    ),
                   ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: _sendMessage,
                 ),
               ],
             ),
-          );
-        },
+          ),
+        ],
       ),
     );
   }
